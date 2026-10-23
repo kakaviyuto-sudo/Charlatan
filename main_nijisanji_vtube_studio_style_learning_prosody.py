@@ -460,13 +460,13 @@ def learn_style_from_youtube_videos(urls):
 
     details = []
     if learned:
-        details.append("学習した動画:\\n" + "\n".join(learned))
+        details.append("学習した動画:\\n" + "\\n".join(learned))
     if skipped_known:
-        details.append("すでに学習済み:\\n" + "\n".join(skipped_known))
+        details.append("すでに学習済み:\\n" + "\\n".join(skipped_known))
     if failed:
         details.append(
             "取得できなかった動画:\\n"
-            + "\n".join(f"{url}（{reason}）" for url, reason in failed)
+            + "\\n".join(f"{url}（{reason}）" for url, reason in failed)
         )
 
     if prosody_values:
@@ -486,7 +486,7 @@ def learn_style_from_youtube_videos(urls):
             "Ollamaが起動しているか確認して、もう一度試してください。"
         )
 
-    return summary + ("\n\n" + "\n\n".join(details) if details else "")
+    return summary + ("\\n\\n" + "\\n\\n".join(details) if details else "")
 
 
 def load_style_video_urls_file():
@@ -598,7 +598,6 @@ def save_chat_history():
         print("会話履歴の保存エラー:", repr(error))
 
 
-
 def add_history(role, content):
     """履歴を追加し、件数制限を適用してから保存する"""
     history.append({
@@ -610,7 +609,6 @@ def add_history(role, content):
         del history[:-HISTORY_LIMIT]
 
     save_chat_history()
-
 
 # 起動時に過去の会話を復元
 history = load_chat_history()
@@ -969,8 +967,6 @@ def search_youtube(query):
         return f"YouTube検索に失敗しました: {error}"
 
 
-
-
 def search_web(query):
     """BingでWeb検索し、検索結果ページの本文を取得する"""
     results = []
@@ -1130,7 +1126,6 @@ def summarize_video(video_text):
     return response.choices[0].message.content or "要約を生成できませんでした。"
 
 
-
 def learn_youtube_video(url):
     """字幕を取得して分析し、知識として保存する"""
     video_id = extract_youtube_video_id(url)
@@ -1216,7 +1211,6 @@ def learn_youtube_video(url):
         )
 
 
-
 def build_search_index(items):
     """保存済み動画から検索用テキストを一度だけ作成する"""
     index = []
@@ -1232,10 +1226,8 @@ def build_search_index(items):
 
     return index
 
-
 # 起動時に検索用インデックスを作成
 youtube_search_index = build_search_index(youtube_knowledge)
-
 
 
 def load_nijisanji_wiki_knowledge():
@@ -1319,7 +1311,6 @@ def search_saved_knowledge(question):
     return "\n\n---\n\n".join(contexts)
 
 
-
 def generate_reply(user_text):
     # チビドキの表記を統一する
     for alias, canonical_name in NAME_ALIASES.items():
@@ -1366,7 +1357,7 @@ def generate_reply(user_text):
 
     def is_valid_video_id(video_id):
         return bool(
-           video_id and VIDEO_ID_RE.fullmatch(video_id)
+            video_id and VIDEO_ID_RE.fullmatch(video_id)
     )
 
     saved_phrases = [
@@ -1472,7 +1463,7 @@ def generate_reply(user_text):
         )
 
     # システム指示を先頭に置く
-   
+    
     # 基本のキャラクター設定に学習済みの話し方を追加
     style_instruction = ""
 
@@ -1566,6 +1557,54 @@ def generate_reply(user_text):
 IDLE_CHAT_INTERVAL = 60  # 無音が続いたら話しかけるまでの秒数
 
 
+# 直近の話題と重複しないように、トレンド候補をフィルタする
+STOP_TOPIC_WORDS = {
+    "最新", "ニュース", "話題", "関連", "情報", "まとめ", "ニュース", "トレンド",
+    "これ", "それ", "ある", "なる", "そう", "また", "今回", "現在",
+    "見る", "話す", "知る", "何", "どう", "どこ", "ここ", "あれ", "しよう"
+}
+
+
+def _extract_topic_terms(text):
+    if not text:
+        return set()
+    terms = re.findall(r"[一-龥ぁ-んァ-ヶー]{2,}|[A-Za-z0-9]{3,}", str(text).lower())
+    filtered = []
+    for term in terms:
+        if len(term) < 2:
+            continue
+        if term in STOP_TOPIC_WORDS:
+            continue
+        filtered.append(term)
+    return set(filtered)
+
+
+def _filter_same_topic_trends(trend_entries, recent_history, limit=8):
+    recent_terms = set()
+    for item in recent_history[-12:]:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content", "")
+        recent_terms |= _extract_topic_terms(content)
+
+    if not recent_terms:
+        return trend_entries[:limit]
+
+    ranked = []
+    for entry in trend_entries:
+        terms = entry.get("keywords", set())
+        overlap = len(terms & recent_terms)
+        ranked.append((overlap, entry))
+
+    ranked.sort(key=lambda pair: (pair[0], pair[1].get("title", "")))
+    filtered = [entry for overlap, entry in ranked if overlap == 0]
+    if filtered:
+        return filtered[:limit]
+
+    # 直近の話題と最も重ならない候補を優先する
+    return [entry for _, entry in ranked[:limit]]
+
+
 def fetch_current_trends(limit=8):
     """Googleトレンドから日本の最新話題を取得する"""
 
@@ -1586,7 +1625,7 @@ def fetch_current_trends(limit=8):
 
     topics = []
 
-    for item in root.findall("./channel/item")[:limit]:
+    for item in root.findall("./channel/item")[:limit * 3]:
         title = (item.findtext("title") or "").strip()
 
         if not title:
@@ -1603,7 +1642,6 @@ def fetch_current_trends(limit=8):
         if traffic:
             line += f"（検索規模の目安: {traffic}）"
 
-        # 関連ニュースの見出しも取得
         news_items = item.findall("ht:news_item", ns)
 
         for news in news_items[:2]:
@@ -1619,9 +1657,18 @@ def fetch_current_trends(limit=8):
             if news_title:
                 line += f"\n  関連ニュース: {news_title}"
 
-        topics.append(line)
+        topic_terms = _extract_topic_terms(line)
+        topics.append({
+            "title": title,
+            "text": line,
+            "keywords": topic_terms,
+        })
 
-    return "\n".join(topics)
+    filtered_topics = _filter_same_topic_trends(topics, history)
+    if not filtered_topics:
+        filtered_topics = topics[:limit]
+
+    return "\n".join(entry["text"] for entry in filtered_topics[:limit])
 
 
 def generate_proactive_reply():
@@ -1642,10 +1689,8 @@ def generate_proactive_reply():
         "content": SYSTEM_PROMPT + """
 
 あなたは自分からも自然に話しかけるAIです。
-女性らしい柔らかく親しみやすい口調で、友達に話しかけるように話してください。一人称は必要に応じて「私」を使い、「〜かな」「〜だね」「〜かも」などを自然に織り交ぜます。男性的な語尾や、わざとらしい「〜だわ」「〜かしら」の連発は避けてください。
-
-以下にインターネットから取得した最新トレンドがあります。
-この情報を話題選びに活用してください。
+女性らしい柔らかく親しみやすい口調で、友達に話しかけるように話してください。一人称は必要に応じて「私」を使い、「〜かな」「〜だね」「〜かも」など自然な語尾を使ってください。
+直前の会話と同じ話題を繰り返さず、話題を変えながら自然に声をかけてください。
 
 【会話のルール】
 - トレンドから興味深い話題を1つ選ぶ
@@ -1850,7 +1895,6 @@ class VTubeStudioController:
         self._reset_connection()
 
 
-
 vts = VTubeStudioController()
 
 
@@ -2028,7 +2072,7 @@ def generate_screen_comment():
     prompt = f"""
 あなたはユーザーの隣で同じ画面を見ている、気の利く日本語の相棒AIです。
 女性らしい柔らかく親しみやすい口調で、友達と一緒に画面を見ていて、思わず口に出した一言のように話してください。
-一人称は必要なときに「私」を使い、「あ、これ気になるね」「ちょっと面白いかも」など、自然な言い回しを使います。男性的な語尾や、わざとらしい女性語の連発は避け、自信があり少しいたずら好きな雰囲気は残してください。
+一人称は必要なときに「私」を使い、「あ、これ気になるね」「ちょっと面白いかも」など、自然な言い回しを使います。男性的な語尾や、わざとらしい掛け声は避けます。
 
 【前面ウィンドウのタイトル】
 {window_title or "取得できませんでした"}
@@ -2036,7 +2080,7 @@ def generate_screen_comment():
 【実況の方針】
 - 画面内のWebページ、動画、ゲーム、アプリの「今起きていること」や「注目すべき内容」を優先する
 - 「画面には〇〇が表示されています」のような機械的な説明は禁止。見て気づいたことに、自然な感想や軽いツッコミを添える
-- たとえば「あっ、ここは見逃せないね」「あ、さっきと話が変わってきたな」「これ、ちょっと気になるな」などを参考にする。ただし例文をそのまま毎回使わず、画面に合わせて表現を変える
+- たとえば「あっ、ここは見逃せないね」「あ、さっきと話が変わってきたな」「これ、ちょっと気になるな」などを参考にする。ただし例文をそのまま使わない
 - Webページなら、記事の主題、見出し、表示中の情報、ユーザーが見ていそうな大事なところに反応する
 - 動画なら、見えている場面や字幕から分かることに反応する。音声や画面外の出来事を見たふりしない
 - ページをスクロールしたり、タブや内容が変わった場合は、前のコメントを繰り返さず、新しく見えた情報に触れる
@@ -2105,7 +2149,6 @@ def generate_screen_comment():
     return reply
 
 
-
 def main():
     print("\n==============================")
     print(" ニューロ会話AI 音声会話モード")
@@ -2121,7 +2164,7 @@ def main():
             user_text = listen()
 
             if not user_text:
-                             # 無音待機を短くし、画面の変化に素早く反応する
+                              # 無音待機を短くし、画面の変化に素早く反応する
                 if (
                     time.monotonic() - last_screen_check
                     >= SCREEN_CHECK_INTERVAL
