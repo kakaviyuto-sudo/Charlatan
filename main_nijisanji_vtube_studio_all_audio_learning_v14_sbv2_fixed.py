@@ -1,3 +1,9 @@
+import base64
+import difflib
+import io
+import os
+import re
+
 # Vision model for screen understanding
 VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
 VISION_MODEL_CANDIDATES = [
@@ -9,6 +15,68 @@ VISION_MODEL_CANDIDATES = [
     "gemma3:4b",
 ]
 VISION_MODEL_CANDIDATES = list(dict.fromkeys(model for model in VISION_MODEL_CANDIDATES if model))
+
+
+def _normalize_topic_text(text):
+    """最近話した内容と比較できるよう、表記ゆれを吸収して正規化する。"""
+    if text is None:
+        return ""
+    text = str(text).strip().lower()
+    text = text.replace("…", "")
+    text = text.replace("・", "")
+    text = re.sub(r"[\s\u3000]+", "", text)
+    text = re.sub(r"[\(\)\[\]{}<>\"'「」『』]+", "", text)
+    text = re.sub(r"[。！？!？?.,;:〜～\-_/\\]+", "", text)
+    return text
+
+
+def _is_repeated_topic(candidate_text, recent_entries, threshold=0.72, token_overlap_threshold=0.35):
+    """近い話題を再利用しない。文字列の類似度と語彙の重複の両方を見る。"""
+    if not candidate_text:
+        return False
+
+    normalized_candidate = _normalize_topic_text(candidate_text)
+    if not normalized_candidate:
+        return False
+
+    candidate_tokens = set(re.findall(r"[ぁ-んァ-ン一-龯a-zA-Z0-9]+", normalized_candidate))
+
+    for previous in recent_entries:
+        if not previous:
+            continue
+
+        previous_norm = _normalize_topic_text(previous)
+        if not previous_norm:
+            continue
+
+        similarity = difflib.SequenceMatcher(None, normalized_candidate, previous_norm).ratio()
+        if similarity >= threshold:
+            return True
+
+        previous_tokens = set(re.findall(r"[ぁ-んァ-ン一-龯a-zA-Z0-9]+", previous_norm))
+        if not candidate_tokens or not previous_tokens:
+            continue
+
+        overlap = len(candidate_tokens & previous_tokens) / max(1, min(len(candidate_tokens), len(previous_tokens)))
+        if overlap >= token_overlap_threshold:
+            return True
+
+    return False
+
+
+def _record_recent_topic(topic_text):
+    """過去の話題を保持し、同じ話題を短時間に繰り返さない。"""
+    global _recent_screen_comments
+
+    if not topic_text:
+        return False
+
+    if _is_repeated_topic(topic_text, _recent_screen_comments):
+        return False
+
+    _recent_screen_comments.append(topic_text)
+    _recent_screen_comments = _recent_screen_comments[-8:]
+    return True
 
 
 def call_vision_model(prompt, image_data):
@@ -110,6 +178,7 @@ def generate_screen_comment():
 - パスワード、個人情報、認証コードを読み上げない
 - 1〜2文で短く、自然なタメ口にする
 - 「ポイント」や見出し、箇条書きは禁止。実際に話す言葉だけを返す
+- 直近に話した内容と近い話題を繰り返さないこと
 
 【前面ウィンドウのタイトル】
 {window_title or "取得できませんでした"}
@@ -125,14 +194,12 @@ def generate_screen_comment():
     if not reply or reply.upper() == "SKIP":
         return ""
 
-    normalized = re.sub(r"\s+", "", reply).strip("。、！!？? ")
-    for previous in _recent_screen_comments:
-        previous_normalized = re.sub(r"\s+", "", previous).strip("。、！!？? ")
-        if normalized and difflib.SequenceMatcher(None, normalized, previous_normalized).ratio() >= 0.72:
-            return ""
+    if _is_repeated_topic(reply, _recent_screen_comments):
+        return ""
 
-    _recent_screen_comments.append(reply)
-    _recent_screen_comments = _recent_screen_comments[-8:]
+    if not _record_recent_topic(reply):
+        return ""
+
     print(f"Qwen2.5-VL画面認識（{model_name}）: {reply}")
     return reply
 
